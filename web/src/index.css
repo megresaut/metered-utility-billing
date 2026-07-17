@@ -1,0 +1,23 @@
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Neutral-first system: warm gray UI, color reserved for data + status. */
+  --color-ink: #1c1917;
+  --color-accent: #2a78d6;
+
+  /* status (icon/dot + label, never color alone) */
+  --color-status-good: #0ca30c;
+  --color-status-warn: #b45309;
+  --color-status-critical: #d03b3b;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--color-stone-50);
+  color: var(--color-stone-900);
+  font-feature-settings: "cv11";
+}

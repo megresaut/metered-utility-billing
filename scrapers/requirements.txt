@@ -1,0 +1,8 @@
+anthropic>=0.40.0
+playwright==1.47.0
+requests==2.32.3
+python-dotenv==1.0.1
+pydantic==2.9.2
+pdfplumber==0.11.4
+tenacity==8.2.3
+python-multipart==0.0.20

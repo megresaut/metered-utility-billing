@@ -1,0 +1,10 @@
+data/
+scrapers/.venv/
+api/server
+web/node_modules/
+web/dist/
+.env
+*.log
+__pycache__/
+.claude/
+dist/
