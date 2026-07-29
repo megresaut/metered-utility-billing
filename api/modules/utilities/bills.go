@@ -93,7 +93,7 @@ func (m *Module) listBills(w http.ResponseWriter, r *http.Request) {
 	}
 	q += ` ORDER BY coalesce(b.statement_date, b.created_at::date) DESC, b.id DESC LIMIT 500`
 
-	rows, err := m.db.Query(r.Context(), q, args...)
+	rows, err := m.q(r.Context()).Query(r.Context(), q, args...)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -120,7 +120,7 @@ func (m *Module) billsSummary(w http.ResponseWriter, r *http.Request) {
 		Count int64
 		Cents int64
 	}
-	err := m.db.QueryRow(r.Context(), `
+	err := m.q(r.Context()).QueryRow(r.Context(), `
 		SELECT
 		  count(*) FILTER (WHERE status = 'outstanding' AND (due_date IS NULL OR due_date >= current_date)),
 		  coalesce(sum(amount_cents) FILTER (WHERE status = 'outstanding' AND (due_date IS NULL OR due_date >= current_date)), 0),
@@ -147,7 +147,7 @@ func (m *Module) billsSummary(w http.ResponseWriter, r *http.Request) {
 		Cents        int64  `json:"cents"`
 	}
 	spend := []spendRow{}
-	rows, err := m.db.Query(r.Context(), `
+	rows, err := m.q(r.Context()).Query(r.Context(), `
 		SELECT to_char(date_trunc('month', coalesce(b.statement_date, b.created_at::date)), 'YYYY-MM'),
 		       b.property_id, coalesce(pr.name, 'Unassigned'), sum(b.amount_cents)
 		FROM bills b
@@ -182,7 +182,7 @@ func (m *Module) getBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	b, err := scanBill(m.db.QueryRow(r.Context(),
+	b, err := scanBill(m.q(r.Context()).QueryRow(r.Context(),
 		billSelect+` WHERE b.id = $1 AND b.org_id = $2`, id, middleware.OrgID(r.Context())))
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "bill not found")
@@ -202,7 +202,7 @@ func (m *Module) servePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var objKey string
-	err = m.db.QueryRow(r.Context(),
+	err = m.q(r.Context()).QueryRow(r.Context(),
 		`SELECT pdf_object_key FROM bills WHERE id = $1 AND org_id = $2`,
 		id, middleware.OrgID(r.Context())).Scan(&objKey)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -243,7 +243,7 @@ func (m *Module) patchBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "status must be outstanding or paid")
 		return
 	}
-	tag, err := m.db.Exec(r.Context(),
+	tag, err := m.q(r.Context()).Exec(r.Context(),
 		`UPDATE bills SET status = $1 WHERE id = $2 AND org_id = $3`,
 		*req.Status, id, middleware.OrgID(r.Context()))
 	if err != nil {
@@ -263,7 +263,7 @@ func (m *Module) deleteBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	tag, err := m.db.Exec(r.Context(),
+	tag, err := m.q(r.Context()).Exec(r.Context(),
 		`DELETE FROM bills WHERE id = $1 AND org_id = $2`, id, middleware.OrgID(r.Context()))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
@@ -320,7 +320,7 @@ func (m *Module) uploadBill(w http.ResponseWriter, r *http.Request) {
 	}
 	if propertyID != nil {
 		var ok bool
-		if err := m.db.QueryRow(r.Context(),
+		if err := m.q(r.Context()).QueryRow(r.Context(),
 			`SELECT true FROM properties WHERE id = $1 AND org_id = $2`, *propertyID, orgID,
 		).Scan(&ok); errors.Is(err, pgx.ErrNoRows) {
 			httpx.Error(w, http.StatusNotFound, "property not found")
@@ -334,7 +334,7 @@ func (m *Module) uploadBill(w http.ResponseWriter, r *http.Request) {
 		aid, err := parseInt64(s)
 		if err == nil {
 			var prov, prop int64
-			err := m.db.QueryRow(r.Context(),
+			err := m.q(r.Context()).QueryRow(r.Context(),
 				`SELECT provider_id, property_id FROM utility_accounts WHERE id = $1 AND org_id = $2`,
 				aid, orgID).Scan(&prov, &prop)
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -389,7 +389,7 @@ func (m *Module) uploadBill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var billID int64
-	err = m.db.QueryRow(r.Context(), `
+	err = m.q(r.Context()).QueryRow(r.Context(), `
 		INSERT INTO bills
 			(org_id, utility_account_id, provider_id, property_id, vendor_name,
 			 amount_cents, statement_date, due_date, service_start, service_end,
@@ -405,7 +405,16 @@ func (m *Module) uploadBill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := scanBill(m.db.QueryRow(r.Context(),
+	// If this manual upload is tied to an auto-capture account, move its cron:
+	// recompute next_scheduled_scrape_at from the newest service_end (now
+	// including this bill) — same slot a successful scrape would set — so we
+	// don't re-scrape a period we already have in hand. No-ops when the bill
+	// has no service_end.
+	if accountID != nil {
+		m.RecomputeNextScrapeAfterSuccess(r.Context(), *accountID)
+	}
+
+	b, err := scanBill(m.q(r.Context()).QueryRow(r.Context(),
 		billSelect+` WHERE b.id = $1 AND b.org_id = $2`, billID, orgID))
 	if err != nil {
 		httpx.JSON(w, http.StatusCreated, map[string]any{"id": billID})

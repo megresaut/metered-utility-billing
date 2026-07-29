@@ -1,0 +1,12 @@
+# Keep the build context small and reproducible — never ship local state.
+.git/
+data/
+scrapers/.venv/
+scrapers/**/__pycache__/
+**/__pycache__/
+web/node_modules/
+web/dist/
+api/server
+.env
+*.log
+.claude/

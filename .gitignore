@@ -8,3 +8,9 @@ web/dist/
 __pycache__/
 .claude/
 dist/
+
+# OVH deploy secrets & local state (never commit)
+deploy/ovh/.env.production
+deploy/ovh/db/certs/
+deploy/ovh/backups/
+deploy/ovh/.vps-access.env

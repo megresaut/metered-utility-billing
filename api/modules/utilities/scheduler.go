@@ -37,7 +37,7 @@ func (m *Module) StartScheduler(ctx context.Context, interval time.Duration) {
 // SchedulerRunOnce runs a single cycle and returns how many jobs were
 // enqueued. Also used by the manual "run scheduler now" endpoint.
 func (m *Module) SchedulerRunOnce(ctx context.Context) int {
-	rows, err := m.db.Query(ctx, `
+	rows, err := m.sys.Query(ctx, `
 		SELECT ua.id, ua.org_id
 		FROM utility_accounts ua
 		WHERE ua.active = true
@@ -80,7 +80,7 @@ func (m *Module) SchedulerRunOnce(ctx context.Context) int {
 // enqueueDue re-checks due-ness under a row lock (so two instances can't
 // both enqueue), stamps the tentative +1 month debounce slot, then enqueues.
 func (m *Module) enqueueDue(ctx context.Context, acctID, orgID int64) bool {
-	tx, err := m.db.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := m.sys.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return false
 	}

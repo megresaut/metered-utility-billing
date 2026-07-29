@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, getToken, getUser, type Bill, type OrgUser } from '../lib/api'
+import { api, openDownload, getUser, type Bill, type OrgUser } from '../lib/api'
 import { fmtDate } from '../lib/format'
 import { DEMO, demoExportCsv } from '../lib/demo'
 import { Button, Card, PageHeader, Spinner } from '../components/ui'
@@ -105,7 +105,7 @@ export default function Settings() {
             variant="secondary"
             onClick={() => {
               if (DEMO) return void demoExportCsv(new URLSearchParams())
-              window.open(`/api/export/csv?token=${getToken()}`, '_blank')
+              openDownload('/api/export/csv')
             }}
           >
             ⤓ Export all data (CSV)

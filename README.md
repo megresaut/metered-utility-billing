@@ -12,7 +12,7 @@ the build decision log.
 
 ```
 api/         Go REST API (cmd/server, cmd/admin, modules/…)
-scrapers/    Python + Playwright provider scrapers + Claude invoice parser
+scrapers/    Python + Playwright provider scrapers + OpenRouter invoice parser
 migrations/  Postgres schema + provider seed
 web/         React + Vite + Tailwind frontend
 scripts/     demo-data seeding
@@ -33,7 +33,7 @@ Deploy: Vercel project rooted at `web/`, build env `VITE_DEMO=1`.
 
 - **API** — Go (stdlib router + pgx/v5, raw SQL), port **8090**
 - **Scrapers** — Python + Playwright (16 providers, ported from ra-avm) +
-  Claude-based invoice parser
+  OpenRouter-based invoice parser (pdfplumber text extraction → cheap LLM)
 - **Web** — React + TypeScript + Vite + Tailwind, dev server port **5174**
 - **DB** — Postgres, database `utility_billing_platform_local`
 
@@ -51,7 +51,8 @@ DATABASE_URL=postgres://localhost:5432/utility_billing_platform_local?sslmode=di
 PORT=8090
 JWT_SECRET=$(openssl rand -hex 24)
 CRED_MASTER_KEY=$(openssl rand -hex 32)   # AES-256 key for portal credentials
-ANTHROPIC_API_KEY=sk-ant-...              # for AI bill extraction
+OPENROUTER_API_KEY=sk-or-...              # for AI bill extraction (OpenAI-compatible)
+OPENROUTER_MODEL=openai/gpt-4o-mini       # optional; extraction model
 EOF
 
 # 3. Scraper environment (venv + Playwright Chromium)
@@ -98,9 +99,15 @@ Or, with `.env` in place: `make api`, `make web`, `make scrapers-setup`.
   a demo with it.
 - Bill PDFs are stored under `data/store/` (`STORE_ROOT`); bills reference
   them by object key.
-- Multi-tenancy is enforced at the application layer: every JWT carries
-  `org_id`, every query filters on it. RLS/per-tenant keys are post-pilot
-  hardening items.
+- Multi-tenancy is enforced two ways: (1) application layer — every JWT carries
+  `org_id` and every query filters on it; (2) Postgres **row-level security**
+  (`003_rls.sql`) as defense-in-depth. The API runs two pools — an app pool
+  (request path; the OrgDB middleware pins a connection and sets `app.org_id` so
+  RLS scopes every query to the caller's org) and a bypass pool (worker,
+  scheduler, login, migrations, admin CLI — trusted cross-org paths).
+  **RLS only enforces when the app connects as a non-superuser role** (true on
+  Render; a local superuser bypasses it). Per-tenant key rotation is still
+  post-pilot.
 
 ## Layout
 

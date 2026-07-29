@@ -9,10 +9,23 @@ import (
 	"strings"
 )
 
+// defaultJWTSecret is the local-dev fallback. Validate() refuses to boot with
+// this value when APP_ENV=production.
+const defaultJWTSecret = "dev-only-jwt-secret-change-me"
+
 type Config struct {
+	// AppEnv: "development" (default) or "production". Production enables the
+	// boot-time safety checks in Validate().
+	AppEnv string
+
 	Port        string
 	DatabaseURL string
 	JWTSecret   string
+
+	// CORSAllowedOrigins: exact origins allowed by the CORS middleware. In dev
+	// this defaults to the Vite server; in prod set CORS_ALLOWED_ORIGINS to the
+	// deployed frontend origin(s), comma-separated.
+	CORSAllowedOrigins []string
 
 	// CRED_MASTER_KEY: 64 hex chars (32 bytes) for AES-256-GCM credential
 	// encryption. Required to create accounts with credentials or run scrapes.
@@ -35,7 +48,7 @@ type Config struct {
 
 // Load reads .env (if present, without overriding real env vars) and builds
 // the config with local-dev defaults so a fresh checkout runs with only
-// CRED_MASTER_KEY / ANTHROPIC_API_KEY supplied.
+// CRED_MASTER_KEY / OPENROUTER_API_KEY supplied.
 func Load() (*Config, error) {
 	loadDotEnv(".env")
 	loadDotEnv("../.env") // when running from api/
@@ -43,9 +56,12 @@ func Load() (*Config, error) {
 	root := repoRoot()
 
 	cfg := &Config{
+		AppEnv:      strings.ToLower(getenv("APP_ENV", "development")),
 		Port:        getenv("PORT", "8090"),
 		DatabaseURL: getenv("DATABASE_URL", "postgres://localhost:5432/utility_billing_platform_local?sslmode=disable"),
-		JWTSecret:   getenv("JWT_SECRET", "dev-only-jwt-secret-change-me"),
+		JWTSecret:   getenv("JWT_SECRET", defaultJWTSecret),
+
+		CORSAllowedOrigins: splitList(getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5174")),
 
 		StoreRoot:    getenv("STORE_ROOT", filepath.Join(root, "data", "store")),
 		ScrapersDir:  getenv("SCRAPERS_DIR", filepath.Join(root, "scrapers")),
@@ -73,6 +89,50 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) IsProduction() bool { return c.AppEnv == "production" }
+
+// Validate enforces production safety invariants. It is a no-op in development
+// (so a fresh checkout still runs with dev defaults), but in production it
+// refuses to boot on any configuration that would be unsafe on the public
+// internet: a forgeable JWT secret, missing credential-encryption key, or an
+// unencrypted database connection.
+func (c *Config) Validate() error {
+	if !c.IsProduction() {
+		return nil
+	}
+	var problems []string
+	if c.JWTSecret == defaultJWTSecret || len(c.JWTSecret) < 32 {
+		problems = append(problems, "JWT_SECRET must be set to a strong value (>=32 chars, not the dev default)")
+	}
+	if len(c.CredMasterKey) != 32 {
+		problems = append(problems, "CRED_MASTER_KEY (64 hex chars) is required in production")
+	}
+	if strings.Contains(c.DatabaseURL, "sslmode=disable") {
+		problems = append(problems, "DATABASE_URL must not use sslmode=disable in production")
+	}
+	if strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
+		problems = append(problems, "OPENROUTER_API_KEY is required in production (PDF extraction)")
+	}
+	if len(c.CORSAllowedOrigins) == 0 {
+		problems = append(problems, "CORS_ALLOWED_ORIGINS must list the frontend origin(s) in production")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid production config:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// splitList parses a comma-separated env value into trimmed, non-empty entries.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func decodeHex(s string) ([]byte, error) {

@@ -18,7 +18,7 @@ export default function Accounts() {
   const [accounts, setAccounts] = useState<UtilityAccount[] | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [properties, setProperties] = useState<Property[]>([])
-  const [showAdd, setShowAdd] = useState(false)
+  const [editing, setEditing] = useState<UtilityAccount | 'new' | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const navigate = useNavigate()
@@ -55,7 +55,7 @@ export default function Accounts() {
       <PageHeader
         title="Utility Accounts"
         subtitle="Connect provider logins for auto-scraping, or track manual-only accounts."
-        actions={<Button onClick={() => setShowAdd(true)}>+ Add account</Button>}
+        actions={<Button onClick={() => setEditing('new')}>+ Add account</Button>}
       />
       {error && <div className="mb-4"><ErrorNote message={error} /></div>}
       {notice && (
@@ -79,6 +79,7 @@ export default function Accounts() {
                 <th className="px-3 py-3">Property</th>
                 <th className="px-3 py-3">Account #</th>
                 <th className="px-3 py-3">Mode</th>
+                <th className="px-3 py-3">Last scrape</th>
                 <th className="px-3 py-3">Next scrape</th>
                 <th className="px-5 py-3 text-right">Actions</th>
               </tr>
@@ -108,6 +109,9 @@ export default function Accounts() {
                     )}
                   </td>
                   <td className="px-3 py-3 text-stone-500">
+                    {a.last_run_at ? fmtDateTime(a.last_run_at) : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-stone-500">
                     {a.has_credentials ? fmtDateTime(a.next_scrape_at) : '—'}
                     {a.consecutive_failures > 0 && (
                       <div className="text-xs text-[#d03b3b]">
@@ -125,6 +129,12 @@ export default function Accounts() {
                       </button>
                     )}
                     <button
+                      onClick={() => setEditing(a)}
+                      className="mr-3 text-sm font-medium text-stone-500 hover:text-stone-900"
+                    >
+                      Edit
+                    </button>
+                    <button
                       onClick={() => remove(a)}
                       className="text-sm font-medium text-stone-400 hover:text-red-700"
                     >
@@ -138,13 +148,14 @@ export default function Accounts() {
         )}
       </Card>
 
-      {showAdd && (
+      {editing && (
         <AccountModal
+          account={editing === 'new' ? null : editing}
           providers={providers}
           properties={properties}
-          onClose={() => setShowAdd(false)}
+          onClose={() => setEditing(null)}
           onSaved={() => {
-            setShowAdd(false)
+            setEditing(null)
             load()
           }}
         />
@@ -154,24 +165,28 @@ export default function Accounts() {
 }
 
 function AccountModal({
+  account,
   providers,
   properties,
   onClose,
   onSaved,
 }: {
+  account: UtilityAccount | null
   providers: Provider[]
   properties: Property[]
   onClose: () => void
   onSaved: () => void
 }) {
+  const isEdit = account !== null
   const [form, setForm] = useState({
-    property_id: '',
-    provider_id: '',
-    account_number: '',
-    service_address: '',
-    username: '',
+    property_id: account ? String(account.property_id) : '',
+    provider_id: account ? String(account.provider_id) : '',
+    account_number: account?.account_number ?? '',
+    service_address: account?.service_address ?? '',
+    username: account?.username ?? '',
     password: '',
     sec_answer: '',
+    active: account ? account.active : true,
   })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -184,16 +199,25 @@ function AccountModal({
     e.preventDefault()
     setBusy(true)
     setError('')
+    // Provider and property are immutable on the account; the PUT ignores them,
+    // so on edit we only send the mutable fields.
+    const body = {
+      account_number: form.account_number,
+      service_address: form.service_address,
+      username: form.username,
+      password: form.password, // blank on edit = keep existing credentials
+      sec_answer: form.sec_answer,
+    }
     try {
-      await api.post('/api/utility-accounts', {
-        property_id: Number(form.property_id),
-        provider_id: Number(form.provider_id),
-        account_number: form.account_number,
-        service_address: form.service_address,
-        username: form.username,
-        password: form.password,
-        sec_answer: form.sec_answer,
-      })
+      if (isEdit) {
+        await api.put(`/api/utility-accounts/${account!.id}`, { ...body, active: form.active })
+      } else {
+        await api.post('/api/utility-accounts', {
+          ...body,
+          property_id: Number(form.property_id),
+          provider_id: Number(form.provider_id),
+        })
+      }
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -202,28 +226,36 @@ function AccountModal({
   }
 
   return (
-    <Modal title="Add utility account" onClose={onClose} wide>
+    <Modal title={isEdit ? 'Edit utility account' : 'Add utility account'} onClose={onClose} wide>
       <form onSubmit={submit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Property">
-            <select className={inputCls} value={form.property_id} onChange={set('property_id')} required>
-              <option value="">Select…</option>
-              {properties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+          <Field label="Property" hint={isEdit ? 'Cannot be changed after creation' : undefined}>
+            {isEdit ? (
+              <input className={inputCls} value={account!.property_name} disabled />
+            ) : (
+              <select className={inputCls} value={form.property_id} onChange={set('property_id')} required>
+                <option value="">Select…</option>
+                {properties.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
-          <Field label="Provider">
-            <select className={inputCls} value={form.provider_id} onChange={set('provider_id')} required>
-              <option value="">Select…</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.display_name} ({p.category})
-                </option>
-              ))}
-            </select>
+          <Field label="Provider" hint={isEdit ? 'Cannot be changed after creation' : undefined}>
+            {isEdit ? (
+              <input className={inputCls} value={account!.provider_name} disabled />
+            ) : (
+              <select className={inputCls} value={form.provider_id} onChange={set('provider_id')} required>
+                <option value="">Select…</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.display_name} ({p.category})
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
           <Field label="Account number">
             <input className={inputCls} value={form.account_number} onChange={set('account_number')} required />
@@ -235,19 +267,26 @@ function AccountModal({
 
         <div className="rounded-lg bg-stone-50 p-4 ring-1 ring-inset ring-stone-200">
           <p className="mb-3 text-sm font-medium text-stone-700">
-            Portal credentials <span className="font-normal text-stone-400">— leave blank for manual-only</span>
+            Portal credentials{' '}
+            <span className="font-normal text-stone-400">
+              {isEdit ? '— leave password blank to keep existing' : '— leave blank for manual-only'}
+            </span>
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Portal username">
               <input className={inputCls} value={form.username} onChange={set('username')} autoComplete="off" />
             </Field>
-            <Field label="Portal password" hint="Encrypted with AES-256 before storage">
+            <Field
+              label="Portal password"
+              hint={isEdit ? 'Enter a new password to replace stored credentials' : 'Encrypted with AES-256 before storage'}
+            >
               <input
                 className={inputCls}
                 type="password"
                 value={form.password}
                 onChange={set('password')}
                 autoComplete="new-password"
+                placeholder={isEdit && account!.has_credentials ? '••••••••' : undefined}
               />
             </Field>
             {provider?.code === 'fios' && (
@@ -258,13 +297,25 @@ function AccountModal({
           </div>
         </div>
 
+        {isEdit && (
+          <label className="flex items-center gap-2 text-sm text-stone-700">
+            <input
+              type="checkbox"
+              checked={form.active}
+              onChange={(e) => setForm((f) => ({ ...f, active: e.target.checked }))}
+              className="h-4 w-4 rounded border-stone-300"
+            />
+            Active <span className="text-stone-400">— inactive accounts are skipped by the scheduler</span>
+          </label>
+        )}
+
         {error && <ErrorNote message={error} />}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button type="submit" disabled={busy}>
-            {busy ? 'Saving…' : 'Add account'}
+            {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add account'}
           </Button>
         </div>
       </form>

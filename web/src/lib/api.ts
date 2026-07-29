@@ -77,6 +77,37 @@ export const api = {
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
 }
 
+// Download links (PDF/CSV) must carry auth in the URL because an iframe/anchor
+// can't set an Authorization header. Rather than put the long-lived session
+// token in a URL (where it leaks into logs, history, and Referer), mint a
+// short-lived, download-scoped token per download.
+
+// downloadUrl resolves a URL with a fresh download token attached — for cases
+// that render the URL (e.g. an <iframe src>).
+export async function downloadUrl(path: string, params: Record<string, string> = {}): Promise<string> {
+  const { token } = await api.post<{ token: string }>('/api/download-token')
+  const qs = new URLSearchParams(params)
+  qs.set('token', token)
+  return `${path}?${qs.toString()}`
+}
+
+// openDownload opens a download URL in a new tab. The blank tab is opened
+// synchronously to preserve the click gesture (so it isn't popup-blocked), then
+// navigated once the short-lived token resolves.
+export function openDownload(path: string, params: Record<string, string> = {}) {
+  const w = window.open('', '_blank')
+  api
+    .post<{ token: string }>('/api/download-token')
+    .then(({ token }) => {
+      const qs = new URLSearchParams(params)
+      qs.set('token', token)
+      const url = `${path}?${qs.toString()}`
+      if (w) w.location.href = url
+      else window.location.href = url
+    })
+    .catch(() => w?.close())
+}
+
 // Types mirroring the API
 export type Provider = { id: number; code: string; display_name: string; category: string }
 

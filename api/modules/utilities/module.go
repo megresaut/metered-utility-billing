@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ubp/db"
 )
 
 // SchedulerRequester labels cron-enqueued jobs; the failure/backoff policy
@@ -33,16 +35,26 @@ type Config struct {
 }
 
 type Module struct {
-	db  *pgxpool.Pool
+	db  *pgxpool.Pool // request path (org-scoped via OrgDB middleware)
+	sys *pgxpool.Pool // trusted cross-org path (worker, scheduler); bypasses RLS
 	cfg Config
 }
 
-func NewModule(pool *pgxpool.Pool, cfg Config) *Module {
-	return &Module{db: pool, cfg: cfg}
+func NewModule(appPool, sysPool *pgxpool.Pool, cfg Config) *Module {
+	return &Module{db: appPool, sys: sysPool, cfg: cfg}
 }
 
 func (m *Module) DB() *pgxpool.Pool { return m.db }
 func (m *Module) Config() Config    { return m.cfg }
+
+// q returns the executor a request's queries should use: the org-pinned
+// connection from context (RLS-scoped) when present, else the app pool.
+func (m *Module) q(ctx context.Context) db.Querier {
+	if e := db.FromContext(ctx); e != nil {
+		return e
+	}
+	return m.db
+}
 
 // EnqueueJob inserts a queued scrape_job. The billing period is stored in
 // params JSON for the worker to read.
@@ -55,7 +67,9 @@ func (m *Module) EnqueueJob(ctx context.Context, orgID, acctID int64, period, re
 		return 0, err
 	}
 	var jobID int64
-	err = m.db.QueryRow(ctx, `
+	// Trusted insert with an explicit org_id (from the authed caller or the
+	// scheduler); runs on the bypass pool so it works from both paths.
+	err = m.sys.QueryRow(ctx, `
 		INSERT INTO scrape_jobs
 			(org_id, utility_account_id, requested_by, requested_at, status, attempt, max_attempts, params)
 		VALUES

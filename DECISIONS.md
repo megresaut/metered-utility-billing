@@ -141,3 +141,17 @@ left room for judgment. Newest last.
     PDF files and pushed through the actual upload → Claude extraction path
     (not inserted via SQL), so the dashboard demonstrates real extraction
     output end-to-end.
+
+18. **AI extraction moved from Anthropic direct → OpenRouter (2026-07-20).**
+    `invoice_parser.py` now uses the OpenAI SDK against OpenRouter's
+    OpenAI-compatible endpoint (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
+    default `openai/gpt-4o-mini`) for cost flexibility during beta. Because
+    OpenRouter's API is OpenAI-compatible (no native Anthropic document/PDF
+    input), the parser switched from sending the whole PDF (Claude vision) to
+    **local pdfplumber text extraction → cheap text model**. Tradeoff: this
+    loses layout fidelity and cannot read scanned/image-only PDFs (returns
+    `no_text_extracted`); utility bills are digital PDFs with a text layer, so
+    this is acceptable for beta. Upgrade path: set `OPENROUTER_MODEL` to a
+    multimodal model and send the PDF as image/file input. `anthropic` dep
+    replaced by `openai` in requirements; the CLI stdout-JSON contract Go reads
+    is unchanged.

@@ -30,7 +30,9 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	ctx := context.Background()
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	// Admin writes org tables directly (no request org context), so it uses the
+	// RLS-bypass pool.
+	pool, err := db.ConnectBypass(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
@@ -78,6 +80,29 @@ func main() {
 		}
 		fmt.Printf("created user %d: %s (org %d, role %s)\n", id, *email, *orgID, *role)
 
+	case "reset-password":
+		fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
+		email := fs.String("email", "", "login email")
+		password := fs.String("password", "", "new password")
+		_ = fs.Parse(os.Args[2:])
+		if *email == "" || *password == "" {
+			log.Fatal("--email and --password are required")
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(*password), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("hash: %v", err)
+		}
+		tag, err := pool.Exec(ctx,
+			`UPDATE org_users SET password_hash = $1 WHERE email = $2`,
+			string(hash), strings.ToLower(strings.TrimSpace(*email)))
+		if err != nil {
+			log.Fatalf("reset password: %v", err)
+		}
+		if tag.RowsAffected() == 0 {
+			log.Fatalf("no user with email %s", *email)
+		}
+		fmt.Printf("password reset for %s\n", *email)
+
 	case "list-orgs":
 		rows, err := pool.Query(ctx, `
 			SELECT o.id, o.name, count(u.id)
@@ -102,8 +127,9 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  admin create-org  --name <name>
-  admin create-user --org-id <id> --email <email> --password <pw> [--role admin|member]
+  admin create-org     --name <name>
+  admin create-user    --org-id <id> --email <email> --password <pw> [--role admin|member]
+  admin reset-password --email <email> --password <pw>
   admin list-orgs`)
 	os.Exit(1)
 }

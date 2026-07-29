@@ -66,7 +66,7 @@ func (m *Module) tryClaimAndRun(ctx context.Context) {
 	}
 
 	// claim the next job that does not violate provider caps
-	tx, err := m.db.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := m.sys.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return
 	}
@@ -158,7 +158,7 @@ func (m *Module) tryClaimAndRun(ctx context.Context) {
 		res, err := m.runPython(provider, acctID, period)
 		if err != nil {
 			msg := err.Error()
-			_, _ = m.db.Exec(ctxBG, `update scrape_jobs set status='failed', finished_at=now(), error_message=$2 where id=$1`, jobID, msg)
+			_, _ = m.sys.Exec(ctxBG, `update scrape_jobs set status='failed', finished_at=now(), error_message=$2 where id=$1`, jobID, msg)
 			m.HandleScheduledScrapeFailure(ctxBG, jobID, acctID, msg)
 			log.Printf("[worker] job %d (%s) failed: %s", jobID, provider, truncErr(msg))
 			return
@@ -179,7 +179,7 @@ func (m *Module) tryClaimAndRun(ctx context.Context) {
 			// 3 retries, then back off to the tentative +1mo" treatment as any
 			// other recoverable scrape failure.
 			m.HandleScheduledScrapeFailure(ctxBG, jobID, acctID, msg)
-			_, _ = m.db.Exec(ctxBG,
+			_, _ = m.sys.Exec(ctxBG,
 				`update scrape_jobs set status='failed', finished_at=now(), error_message=$2 where id=$1`,
 				jobID, msg,
 			)
@@ -190,7 +190,7 @@ func (m *Module) tryClaimAndRun(ctx context.Context) {
 		// Bill landed — advance the per-account scrape schedule.
 		m.RecomputeNextScrapeAfterSuccess(ctxBG, acctID)
 
-		_, _ = m.db.Exec(ctxBG,
+		_, _ = m.sys.Exec(ctxBG,
 			`update scrape_jobs set status='succeeded', finished_at=now() where id=$1`,
 			jobID,
 		)
@@ -472,7 +472,7 @@ func (m *Module) runModuleProvider(provider string, acctID int64, period string)
 func (m *Module) loadOptimumAccountType(ctx context.Context, acctID int64) (string, error) {
 	var meta []byte
 
-	if err := m.db.QueryRow(ctx, `
+	if err := m.sys.QueryRow(ctx, `
 		select metadata
 		from utility_accounts
 		where id = $1
@@ -1016,7 +1016,7 @@ func (m *Module) loadAcctCapsSecrets(ctx context.Context, acctID int64) (acctRow
 	var username, svcAddr, acctNum *string
 	var ciphertext, nonce []byte
 
-	if err := m.db.QueryRow(ctx, `
+	if err := m.sys.QueryRow(ctx, `
 		select
 			ua.username,
 			ua.credential_ciphertext,
@@ -1255,7 +1255,7 @@ func storeLocal(storeRoot, provider string, acctID int64, r *pyResult) (objKey, 
 func (m *Module) insertBill(ctx context.Context, orgID, acctID int64, provider string, r *pyResult, objKey, sha string) (int64, error) {
 	var providerID, propertyID int64
 	var vendorName string
-	if err := m.db.QueryRow(ctx, `
+	if err := m.sys.QueryRow(ctx, `
 		select p.id, p.display_name, ua.property_id
 		from utility_accounts ua
 		join providers p on p.id = ua.provider_id
@@ -1265,7 +1265,7 @@ func (m *Module) insertBill(ctx context.Context, orgID, acctID int64, provider s
 	}
 
 	var billID int64
-	err := m.db.QueryRow(ctx, `
+	err := m.sys.QueryRow(ctx, `
 	  insert into bills (
 	    org_id,
 	    utility_account_id,

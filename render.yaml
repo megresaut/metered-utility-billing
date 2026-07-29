@@ -1,0 +1,48 @@
+# Render Blueprint for the Metered API (beta).
+#
+# One Docker web service (API + in-process scrape worker + scheduler) with a
+# persistent disk for bill PDFs / 2FA handoff, plus a managed Postgres with
+# automated backups. The React frontend deploys separately to Vercel and points
+# at this service's URL; set CORS_ALLOWED_ORIGINS to that Vercel origin.
+#
+# Secrets marked `sync: false` are NOT stored in git — set them in the Render
+# dashboard after the first deploy (see DEPLOY.md).
+
+services:
+  - type: web
+    name: metered-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # Starter or higher: persistent disks aren't on free.
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: metered-data
+      mountPath: /data       # matches STORE_ROOT=/data/store, HANDOFF_DIR=/data/handoff
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: STORE_ROOT
+        value: /data/store
+      - key: HANDOFF_DIR
+        value: /data/handoff
+      - key: DATABASE_URL
+        fromDatabase:
+          name: metered-db
+          property: connectionString
+      - key: JWT_SECRET        # Render generates a strong random value.
+        generateValue: true
+      - key: CRED_MASTER_KEY   # 64 hex chars — set in dashboard (see DEPLOY.md).
+        sync: false
+      - key: OPENROUTER_API_KEY # set in dashboard.
+        sync: false
+      - key: OPENROUTER_MODEL   # optional; defaults to openai/gpt-4o-mini in code.
+        value: openai/gpt-4o-mini
+      - key: CORS_ALLOWED_ORIGINS # e.g. https://app.yourdomain.com — set in dashboard.
+        sync: false
+
+databases:
+  - name: metered-db
+    plan: basic-256mb        # a paid tier: includes automated daily backups.
+    postgresMajorVersion: "16"

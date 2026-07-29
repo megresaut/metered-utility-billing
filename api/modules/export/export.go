@@ -4,6 +4,7 @@
 package export
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"ubp/db"
 	"ubp/httpx"
 	"ubp/middleware"
 )
@@ -18,6 +20,14 @@ import (
 type Module struct{ db *pgxpool.Pool }
 
 func New(db *pgxpool.Pool) *Module { return &Module{db: db} }
+
+// q returns the org-pinned request connection when present, else the app pool.
+func (m *Module) q(ctx context.Context) db.Querier {
+	if e := db.FromContext(ctx); e != nil {
+		return e
+	}
+	return m.db
+}
 
 func (m *Module) Routes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handler) {
 	mux.Handle("GET /api/export/csv", authed(m.exportCSV))
@@ -51,7 +61,7 @@ func (m *Module) exportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	q += ` ORDER BY coalesce(b.statement_date, b.created_at::date) DESC, b.id DESC`
 
-	rows, err := m.db.Query(r.Context(), q, args...)
+	rows, err := m.q(r.Context()).Query(r.Context(), q, args...)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
 		return

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, getToken, type Bill, type Property } from '../lib/api'
+import { api, openDownload, type Bill, type Property } from '../lib/api'
 import { DEMO, demoExportCsv } from '../lib/demo'
 import { money, fmtDate } from '../lib/format'
 import {
@@ -50,15 +50,24 @@ export default function Bills() {
       `${b.vendor_name} ${b.property_name} ${b.account_number}`.toLowerCase().includes(needle),
   )
 
+  async function setBillStatus(id: number, status: 'paid' | 'outstanding') {
+    setError('')
+    try {
+      await api.patch(`/api/bills/${id}`, { status })
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update status')
+    }
+  }
+
   function exportCSV() {
-    const params = new URLSearchParams()
-    if (propertyID) params.set('property_id', propertyID)
     if (DEMO) {
+      const params = new URLSearchParams()
+      if (propertyID) params.set('property_id', propertyID)
       demoExportCsv(params)
       return
     }
-    params.set('token', getToken() ?? '')
-    window.open(`/api/export/csv?${params}`, '_blank')
+    openDownload('/api/export/csv', propertyID ? { property_id: propertyID } : {})
   }
 
   return (
@@ -136,7 +145,8 @@ export default function Bills() {
                 <th className="px-3 py-3">Due</th>
                 <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3">Source</th>
-                <th className="px-5 py-3 text-right">Amount</th>
+                <th className="px-3 py-3 text-right">Amount</th>
+                <th className="px-5 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -158,8 +168,25 @@ export default function Bills() {
                   <td className="px-3 py-3 text-stone-500">{fmtDate(b.due_date)}</td>
                   <td className="px-3 py-3"><Pill value={b.status} /></td>
                   <td className="px-3 py-3"><Pill value={b.source} /></td>
-                  <td className="px-5 py-3 text-right font-medium text-stone-800">
+                  <td className="px-3 py-3 text-right font-medium text-stone-800">
                     {money(b.amount_cents)}
+                  </td>
+                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                    {b.status === 'paid' ? (
+                      <button
+                        onClick={() => setBillStatus(b.id, 'outstanding')}
+                        className="text-sm font-medium text-stone-400 hover:text-stone-900"
+                      >
+                        Mark outstanding
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setBillStatus(b.id, 'paid')}
+                        className="text-sm font-medium text-stone-500 hover:text-emerald-700"
+                      >
+                        ✓ Mark paid
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

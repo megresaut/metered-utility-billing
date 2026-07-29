@@ -2,12 +2,14 @@
 package properties
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"ubp/db"
 	"ubp/httpx"
 	"ubp/middleware"
 )
@@ -15,6 +17,14 @@ import (
 type Module struct{ db *pgxpool.Pool }
 
 func New(db *pgxpool.Pool) *Module { return &Module{db: db} }
+
+// q returns the org-pinned request connection when present, else the app pool.
+func (m *Module) q(ctx context.Context) db.Querier {
+	if e := db.FromContext(ctx); e != nil {
+		return e
+	}
+	return m.db
+}
 
 func (m *Module) Routes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handler) {
 	mux.Handle("GET /api/properties", authed(m.list))
@@ -36,7 +46,7 @@ type property struct {
 
 func (m *Module) list(w http.ResponseWriter, r *http.Request) {
 	orgID := middleware.OrgID(r.Context())
-	rows, err := m.db.Query(r.Context(), `
+	rows, err := m.q(r.Context()).Query(r.Context(), `
 		SELECT p.id, p.name, coalesce(p.address, ''), p.created_at,
 		       (SELECT count(*) FROM utility_accounts ua WHERE ua.property_id = p.id),
 		       (SELECT count(*) FROM bills b WHERE b.property_id = p.id),
@@ -78,7 +88,7 @@ func (m *Module) create(w http.ResponseWriter, r *http.Request) {
 	}
 	orgID := middleware.OrgID(r.Context())
 	var p property
-	err := m.db.QueryRow(r.Context(), `
+	err := m.q(r.Context()).QueryRow(r.Context(), `
 		INSERT INTO properties (org_id, name, address) VALUES ($1, $2, $3)
 		RETURNING id, name, coalesce(address, ''), created_at
 	`, orgID, strings.TrimSpace(req.Name), req.Address).Scan(&p.ID, &p.Name, &p.Address, &p.CreatedAt)
@@ -100,7 +110,7 @@ func (m *Module) update(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	tag, err := m.db.Exec(r.Context(), `
+	tag, err := m.q(r.Context()).Exec(r.Context(), `
 		UPDATE properties SET name = $1, address = $2 WHERE id = $3 AND org_id = $4
 	`, strings.TrimSpace(req.Name), req.Address, id, middleware.OrgID(r.Context()))
 	if err != nil {
@@ -120,7 +130,7 @@ func (m *Module) remove(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	tag, err := m.db.Exec(r.Context(),
+	tag, err := m.q(r.Context()).Exec(r.Context(),
 		`DELETE FROM properties WHERE id = $1 AND org_id = $2`, id, middleware.OrgID(r.Context()))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())

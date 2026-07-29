@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, getToken, type Bill } from '../lib/api'
+import { api, openDownload, type Bill } from '../lib/api'
 import { money } from '../lib/format'
 import {
   CATEGORY_COLORS,
@@ -56,14 +56,13 @@ export default function Reports() {
   const maxCat = cats[0]?.cents ?? 1
 
   function download(status?: string) {
-    const params = new URLSearchParams()
-    if (status) params.set('status', status)
     if (DEMO) {
+      const params = new URLSearchParams()
+      if (status) params.set('status', status)
       demoExportCsv(params)
       return
     }
-    params.set('token', getToken() ?? '')
-    window.open(`/api/export/csv?${params}`, '_blank')
+    openDownload('/api/export/csv', status ? { status } : {})
   }
 
   if (error) return <p className="text-sm text-red-700">{error}</p>

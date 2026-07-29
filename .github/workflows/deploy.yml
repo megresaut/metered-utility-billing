@@ -1,0 +1,68 @@
+# Manual deploy (workflow_dispatch) — the human gate. Builds the frontend in CI,
+# ships it + the compose/config to the box, pulls the latest API image from
+# GHCR, and restarts Metered (project "ovh"). Never touches Relay.
+name: deploy
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: deploy-metered
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend (relative /api → same-origin)
+        working-directory: web
+        env:
+          VITE_API_URL: ''
+          VITE_DEMO: ''
+        run: npm ci && npm run build
+
+      - name: SSH setup
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ship frontend + compose to the box
+        run: |
+          rsync -az -e "ssh -i ~/.ssh/id_ed25519" \
+            web/dist/ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/home/ubuntu/metered/web/dist/"
+          rsync -az \
+            --exclude '.env.production' --exclude 'db/certs' --exclude 'backups' --exclude '*.log' \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            deploy/ovh/ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/home/ubuntu/metered/deploy/ovh/"
+
+      - name: Pull API image + restart (box logs into GHCR with a per-run token)
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "echo '${{ secrets.GITHUB_TOKEN }}' | sudo docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
+             && cd ~/metered/deploy/ovh \
+             && sudo docker compose --env-file .env.production pull app \
+             && sudo docker compose --env-file .env.production up -d \
+             && sudo docker image prune -f \
+             && sudo docker logout ghcr.io"
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 15 https://metered.rentatrix.com/api/health || true)
+            echo "health: $code"; [ "$code" = "200" ] && exit 0; sleep 5
+          done
+          echo "health check did not return 200"; exit 1

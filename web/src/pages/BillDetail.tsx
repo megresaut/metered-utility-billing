@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, getToken, type Bill } from '../lib/api'
+import { api, downloadUrl, type Bill } from '../lib/api'
 import { DEMO, demoPdfUrl } from '../lib/demo'
 import { money, fmtDate } from '../lib/format'
 import { Button, Card, Pill, Spinner } from '../components/ui'
@@ -9,6 +9,7 @@ export default function BillDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [bill, setBill] = useState<Bill | null>(null)
+  const [pdfURL, setPdfURL] = useState('')
   const [error, setError] = useState('')
 
   const load = useCallback(() => {
@@ -16,10 +17,23 @@ export default function BillDetail() {
   }, [id])
   useEffect(load, [load])
 
+  // Resolve a fresh download-scoped URL for the PDF iframe (the session token
+  // never goes in the URL). In demo mode the bundled sample is used directly.
+  useEffect(() => {
+    if (!bill) return
+    if (DEMO) {
+      setPdfURL(demoPdfUrl())
+      return
+    }
+    let ok = true
+    downloadUrl(`/api/bills/${bill.id}/pdf`).then((u) => ok && setPdfURL(u))
+    return () => {
+      ok = false
+    }
+  }, [bill])
+
   if (error) return <p className="text-sm text-red-700">{error}</p>
   if (!bill) return <Spinner />
-
-  const pdfURL = DEMO ? demoPdfUrl() : `/api/bills/${bill.id}/pdf?token=${getToken()}`
 
   async function setStatus(status: 'paid' | 'outstanding') {
     await api.patch(`/api/bills/${bill!.id}`, { status })
@@ -93,7 +107,13 @@ export default function BillDetail() {
           <div className="border-b border-stone-100 px-5 py-3 text-sm font-semibold text-stone-700">
             Source PDF
           </div>
-          <iframe title="Bill PDF" src={pdfURL} className="h-[75vh] w-full" />
+          {pdfURL ? (
+            <iframe title="Bill PDF" src={pdfURL} className="h-[75vh] w-full" />
+          ) : (
+            <div className="flex h-[75vh] w-full items-center justify-center">
+              <Spinner />
+            </div>
+          )}
         </Card>
       </div>
     </>

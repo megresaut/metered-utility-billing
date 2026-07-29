@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Bills from './pages/Bills'
 import BillDetail from './pages/BillDetail'
 import Properties from './pages/Properties'
+import PropertyDetail from './pages/PropertyDetail'
 import Accounts from './pages/Accounts'
 import Jobs from './pages/Jobs'
 import Reports from './pages/Reports'
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="/bills" element={<Bills />} />
           <Route path="/bills/:id" element={<BillDetail />} />
           <Route path="/properties" element={<Properties />} />
+          <Route path="/properties/:id" element={<PropertyDetail />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/reports" element={<Reports />} />

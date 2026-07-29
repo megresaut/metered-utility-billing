@@ -39,7 +39,7 @@ type providerOut struct {
 }
 
 func (m *Module) listProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := m.db.Query(r.Context(),
+	rows, err := m.q(r.Context()).Query(r.Context(),
 		`SELECT id, code, display_name, category FROM providers ORDER BY display_name`)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
@@ -95,7 +95,7 @@ func (m *Module) listAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	q += ` ORDER BY pr.name, p.display_name`
 
-	rows, err := m.db.Query(r.Context(), q, args...)
+	rows, err := m.q(r.Context()).Query(r.Context(), q, args...)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -142,7 +142,7 @@ func (m *Module) createAccount(w http.ResponseWriter, r *http.Request) {
 
 	// The property must belong to this org.
 	var ok bool
-	if err := m.db.QueryRow(r.Context(),
+	if err := m.q(r.Context()).QueryRow(r.Context(),
 		`SELECT true FROM properties WHERE id = $1 AND org_id = $2`, req.PropertyID, orgID,
 	).Scan(&ok); errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "property not found")
@@ -175,7 +175,7 @@ func (m *Module) createAccount(w http.ResponseWriter, r *http.Request) {
 	// Accounts with credentials get next_scheduled_scrape_at = now so the
 	// next scheduler tick picks them up.
 	var id int64
-	err := m.db.QueryRow(r.Context(), `
+	err := m.q(r.Context()).QueryRow(r.Context(), `
 		INSERT INTO utility_accounts
 			(org_id, property_id, provider_id, account_number, service_address, username,
 			 credential_ciphertext, credential_nonce, active, metadata, next_scheduled_scrape_at)
@@ -209,7 +209,7 @@ func (m *Module) updateAccount(w http.ResponseWriter, r *http.Request) {
 	if req.Active != nil {
 		active = *req.Active
 	}
-	tag, err := m.db.Exec(r.Context(), `
+	tag, err := m.q(r.Context()).Exec(r.Context(), `
 		UPDATE utility_accounts
 		SET account_number = coalesce(nullif($1, ''), account_number),
 		    service_address = $2,
@@ -238,7 +238,7 @@ func (m *Module) updateAccount(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusInternalServerError, "credential encryption failed: "+err.Error())
 			return
 		}
-		if _, err := m.db.Exec(r.Context(), `
+		if _, err := m.q(r.Context()).Exec(r.Context(), `
 			UPDATE utility_accounts
 			SET credential_ciphertext = $1, credential_nonce = $2,
 			    consecutive_scrape_failures = 0,
@@ -258,7 +258,7 @@ func (m *Module) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	tag, err := m.db.Exec(r.Context(),
+	tag, err := m.q(r.Context()).Exec(r.Context(),
 		`DELETE FROM utility_accounts WHERE id = $1 AND org_id = $2`, id, middleware.OrgID(r.Context()))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
@@ -288,7 +288,7 @@ func (m *Module) triggerScrape(w http.ResponseWriter, r *http.Request) {
 
 	// Account must belong to the org and have credentials.
 	var hasCreds bool
-	err := m.db.QueryRow(r.Context(), `
+	err := m.q(r.Context()).QueryRow(r.Context(), `
 		SELECT credential_ciphertext IS NOT NULL FROM utility_accounts
 		WHERE id = $1 AND org_id = $2
 	`, req.UtilityAccountID, orgID).Scan(&hasCreds)
@@ -307,7 +307,7 @@ func (m *Module) triggerScrape(w http.ResponseWriter, r *http.Request) {
 
 	// Skip if a job is already in flight for this account.
 	var inflight bool
-	_ = m.db.QueryRow(r.Context(), `
+	_ = m.q(r.Context()).QueryRow(r.Context(), `
 		SELECT EXISTS (SELECT 1 FROM scrape_jobs
 			WHERE utility_account_id = $1 AND status IN ('queued','running'))
 	`, req.UtilityAccountID).Scan(&inflight)
@@ -359,7 +359,7 @@ func scanJob(row pgx.Row) (jobOut, error) {
 
 func (m *Module) listJobs(w http.ResponseWriter, r *http.Request) {
 	orgID := middleware.OrgID(r.Context())
-	rows, err := m.db.Query(r.Context(),
+	rows, err := m.q(r.Context()).Query(r.Context(),
 		jobSelect+` WHERE sj.org_id = $1 ORDER BY sj.requested_at DESC LIMIT 100`, orgID)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
@@ -384,7 +384,7 @@ func (m *Module) getJob(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	j, err := scanJob(m.db.QueryRow(r.Context(),
+	j, err := scanJob(m.q(r.Context()).QueryRow(r.Context(),
 		jobSelect+` WHERE sj.id = $1 AND sj.org_id = $2`, id, middleware.OrgID(r.Context())))
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "job not found")

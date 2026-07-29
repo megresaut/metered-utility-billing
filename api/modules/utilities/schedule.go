@@ -36,7 +36,7 @@ func (m *Module) RecomputeNextScrapeAfterSuccess(ctx context.Context, acctID int
 		      WHERE b.utility_account_id = ua.id AND b.service_end IS NOT NULL
 		  )
 	`
-	if _, err := m.db.Exec(ctx, q, acctID); err != nil {
+	if _, err := m.sys.Exec(ctx, q, acctID); err != nil {
 		log.Printf("[scrape-schedule] recompute acct=%d failed: %v", acctID, err)
 	}
 }
@@ -46,7 +46,7 @@ func (m *Module) RecomputeNextScrapeAfterSuccess(ctx context.Context, acctID int
 // leave the tentative +1 month slot in place. Manual jobs are untouched.
 func (m *Module) HandleScheduledScrapeFailure(ctx context.Context, jobID, acctID int64, errMsg string) {
 	var requestedBy *string
-	if err := m.db.QueryRow(ctx,
+	if err := m.sys.QueryRow(ctx,
 		`SELECT requested_by FROM scrape_jobs WHERE id = $1`, jobID,
 	).Scan(&requestedBy); err != nil {
 		return
@@ -56,7 +56,7 @@ func (m *Module) HandleScheduledScrapeFailure(ctx context.Context, jobID, acctID
 	}
 
 	var failures int
-	if err := m.db.QueryRow(ctx, `
+	if err := m.sys.QueryRow(ctx, `
 		UPDATE utility_accounts
 		SET consecutive_scrape_failures = consecutive_scrape_failures + 1
 		WHERE id = $1
@@ -67,7 +67,7 @@ func (m *Module) HandleScheduledScrapeFailure(ctx context.Context, jobID, acctID
 	}
 
 	if failures >= MaxConsecutiveScrapeFailures {
-		if _, err := m.db.Exec(ctx,
+		if _, err := m.sys.Exec(ctx,
 			`UPDATE utility_accounts SET consecutive_scrape_failures = 0 WHERE id = $1`, acctID,
 		); err != nil {
 			log.Printf("[scrape-schedule] reset failure count acct=%d failed: %v", acctID, err)
@@ -76,7 +76,7 @@ func (m *Module) HandleScheduledScrapeFailure(ctx context.Context, jobID, acctID
 		return
 	}
 
-	if _, err := m.db.Exec(ctx, `
+	if _, err := m.sys.Exec(ctx, `
 		UPDATE utility_accounts
 		SET next_scheduled_scrape_at =
 		    (((now() + INTERVAL '7 days')::date::timestamp + TIME '06:00')

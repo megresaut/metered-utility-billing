@@ -1,12 +1,21 @@
 import os
 import sys
 import json
-import base64
-from anthropic import Anthropic
+import pdfplumber
+from openai import OpenAI
 from dotenv import load_dotenv
 
+# AI bill extraction via OpenRouter (OpenAI-compatible API). The model is
+# configurable so we can trade cost/quality without a code change; default is a
+# cheap, JSON-reliable model. To use vision on scanned PDFs later, swap to a
+# multimodal model and send the PDF instead of extracted text.
 load_dotenv()
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+client = OpenAI(
+    base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+)
 
 
 # =========================================================
@@ -28,14 +37,28 @@ def extract_json(text: str):
 
 
 # =========================================================
+# PDF → text (utility bills are digital PDFs with a text layer)
+# =========================================================
+def pdf_to_text(pdf_path: str) -> str:
+    parts = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            t = page.extract_text() or ""
+            if t.strip():
+                parts.append(t)
+    return "\n\n".join(parts).strip()
+
+
+# =========================================================
 # Main Parsing
 # =========================================================
 def parse_invoice(pdf_path: str):
 
-    # Read + base64 encode PDF
-    with open(pdf_path, "rb") as f:
-        pdf_bytes = f.read()
-    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    text = pdf_to_text(pdf_path)
+    if not text:
+        # No text layer (likely a scanned image). Cheap text extraction can't
+        # handle this — surface a clear error rather than a bad guess.
+        return {"error": "no_text_extracted", "raw_output": ""}
 
     # =====================================================
     # RAW extraction prompt — no matching, Go handles that
@@ -77,32 +100,20 @@ parse_confidence (0-100): how confident you are in ALL extracted fields.
 No commentary. No markdown. No backticks.
 """
 
-    resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+    resp = client.chat.completions.create(
+        model=MODEL,
         max_tokens=1024,
+        temperature=0,
         messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": system_prompt},
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": pdf_b64,
-                        },
-                    },
-                ],
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Invoice text:\n\n" + text},
         ],
     )
 
-
-    raw_text = resp.content[0].text
+    raw_text = resp.choices[0].message.content or ""
     clean_text = extract_json(raw_text)
 
-    # Parse JSON returned by Claude
+    # Parse JSON returned by the model
     try:
         data = json.loads(clean_text)
     except Exception as e:

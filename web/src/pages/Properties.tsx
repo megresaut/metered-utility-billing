@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, type Property } from '../lib/api'
 import { money } from '../lib/format'
 import {
@@ -57,7 +58,12 @@ export default function Properties() {
               {properties.map((p) => (
                 <tr key={p.id} className="border-b border-stone-100 last:border-0 hover:bg-stone-50">
                   <td className="px-5 py-3">
-                    <div className="font-medium text-stone-800">{p.name}</div>
+                    <Link
+                      to={`/properties/${p.id}`}
+                      className="font-medium text-stone-800 hover:underline"
+                    >
+                      {p.name}
+                    </Link>
                     <div className="text-xs text-stone-400">{p.address}</div>
                   </td>
                   <td className="px-3 py-3 text-stone-600">{p.account_count}</td>

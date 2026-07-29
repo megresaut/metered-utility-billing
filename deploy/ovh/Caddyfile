@@ -1,0 +1,37 @@
+# Caddy: automatic HTTPS for $DOMAIN. Serves the built React SPA and proxies
+# /api/* to the app container (same origin → no browser CORS). Caddy obtains and
+# renews a Let's Encrypt cert automatically once $DOMAIN's DNS points at this VPS.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# API → Go app. Must come before the SPA fallback.
+	handle /api/* {
+		reverse_proxy app:8090
+	}
+
+	# Everything else → the static SPA, with client-side routing fallback.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Basic hardening headers.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+# Co-hosted sibling product: Relay (maintenance-hub). TLS terminated here; the
+# whole hostname is proxied to Relay's internal web tier (relay-web) over the
+# shared `edge` network. Relay's own stack lives in the maintenance-hub repo
+# (deploy/ovh). Kept literal (not $DOMAIN) since this Caddy serves two domains.
+relay.rentatrix.com {
+	encode zstd gzip
+	reverse_proxy relay-web:80
+}
