@@ -1,120 +1,80 @@
-# Metered — Utility Billing Platform (MVP)
+# Metered
 
-Multi-tenant sidecar product for property management firms: captures utility
-bills (automated portal scraping for 16 providers, or manual PDF upload),
-extracts structured data with AI, centralizes everything in one dashboard, and
-exports an accounting-import-ready CSV.
+**Utility bills for property-management firms, captured automatically.**
 
-See `TECHNICAL_PLAN.md` / `FEATURE_PLAN.md` for scope and `DECISIONS.md` for
-the build decision log.
+**Live demo:** https://metered-demo.vercel.app/
 
-## Monorepo layout
+Metered collects every utility bill across a property portfolio, from electric and gas to water, sewer, trash, and internet. It logs into provider portals on a schedule, pulls each new bill, and uses AI to read it. Everything lands in one dashboard, and accounting gets a clean import file. It works alongside whatever property-management and accounting software a firm already uses.
+
+---
+
+## The problem
+
+A firm with a few dozen properties may have over a hundred utility accounts across more than a dozen providers. Each provider has its own portal, password, and billing cycle. Each month someone has to log into every portal, download every PDF, and type the amount, dates, and account number into a spreadsheet or accounting system. They also have to notice the one bill that didn't arrive before it goes overdue. Metered does that work.
+
+## What it does
+
+### Capture
+- **Automatic portal capture.** Metered logs into **16 utility provider portals** for you: Eversource, United Illuminating, Southern CT Gas, Connecticut Natural Gas, Aquarion, Regional Water, Verizon Fios, Optimum, Frontier, Starlink, WinWaste, and more, covering electric, gas, water, sewer, waste, and internet. It downloads new bills on each account's billing cycle.
+  - If a scrape fails, it retries on its own.
+  - For portals that require a two-factor code, the scraper pauses and waits for someone to supply the code.
+- **Manual upload.** Drag in any bill PDF, from any provider, for accounts that aren't automated.
+- **Capture Log.** Every scrape run is logged with its status, so you can see which accounts captured cleanly and which need attention.
+
+### AI extraction
+Every bill, scraped or uploaded, is read by AI. It extracts the **vendor, amount due, statement date, due date, and service period**. The bill detail page shows those fields **next to the original PDF** so anyone can check them at a glance.
+
+### One dashboard for the whole portfolio
+- **Dashboard:** total spend, upcoming payments, overdue bills, spend by category, and the share of bills captured automatically.
+- **Bills:** every bill across all properties, filterable, marked outstanding, overdue, or paid.
+- **Properties:** a page per property with its utility accounts, bill history, and spend over time.
+- **Reports:** monthly spend by property, spend by utility category, top vendors, and a portfolio total.
+
+### Export to accounting
+**One-click CSV export** produces an accounting-import-ready file: amounts in dollars, ISO dates, and property and account number on every row. There's no re-keying.
+
+### Built for multiple firms
+- Each customer firm is a separate **organization**. Data is isolated in the application and again by Postgres **row-level security**.
+- Portal passwords are **encrypted at rest (AES-256-GCM)** and only decrypted at the moment a scrape runs.
+- **Integrations** shows each supported provider and which accounts are connected. **Settings** covers the organization, team, security, and data export.
+- Customer firms are set up by an admin. There's no public self-serve signup.
+
+## Out of scope, on purpose
+- No direct posting into QuickBooks, Buildium, or other accounting systems. The CSV export is the hand-off.
+- No bill payment.
+- No maintenance or vendor features. Those are a separate product, [Maintenance Hub](https://github.com/megresaut/maintenance-hub-platform).
+
+## Tech
+
+- **API and worker:** one Go process (standard library router, pgx/v5, raw SQL) that serves the API, runs the scrape queue, and runs the hourly scheduler.
+- **Scrapers:** Python and Playwright, one module per provider. Bills are parsed by extracting text with pdfplumber and passing it to an LLM via OpenRouter.
+- **Web:** React, TypeScript, Vite, Tailwind.
+- **Database:** PostgreSQL with row-level security. Bill PDFs are stored on disk.
+- **Hosting:** Docker container with Postgres and Caddy (`deploy/ovh/`), with CI/CD through GitHub Actions. A no-backend demo build (`VITE_DEMO=1`) runs on Vercel.
 
 ```
-api/         Go REST API (cmd/server, cmd/admin, modules/…)
-scrapers/    Python + Playwright provider scrapers + OpenRouter invoice parser
-migrations/  Postgres schema + provider seed
-web/         React + Vite + Tailwind frontend
-scripts/     demo-data seeding
+api/         Go API, scrape worker, scheduler, and admin CLI
+scrapers/    provider scrapers and AI bill parser
+migrations/  Postgres schema and provider seed data
+web/         React frontend
+deploy/      production deploy (OVH)
 ```
 
-## Live demo build (Vercel)
+---
 
-The `web/` app builds in a **demo mode** (`VITE_DEMO=1`) that serves a bundled
-data snapshot from `web/public/demo/*.json` instead of calling the Go API — so
-a static host (Vercel) renders the full product (login, dashboard, bills,
-reports, PDF preview, CSV export) with no backend, Postgres, or scrapers
-running. Mutations (mark paid, etc.) apply in-memory and reset on reload. The
-normal build (`VITE_DEMO` unset) talks to the real API and is unchanged.
+## Setup
 
-Deploy: Vercel project rooted at `web/`, build env `VITE_DEMO=1`.
-
-## Stack
-
-- **API** — Go (stdlib router + pgx/v5, raw SQL), port **8090**
-- **Scrapers** — Python + Playwright (16 providers, ported from ra-avm) +
-  OpenRouter-based invoice parser (pdfplumber text extraction → cheap LLM)
-- **Web** — React + TypeScript + Vite + Tailwind, dev server port **5174**
-- **DB** — Postgres, database `utility_billing_platform_local`
-
-## Fresh-checkout setup
-
-Prereqs: Go ≥ 1.24, Node ≥ 20, Python 3.11 or 3.12, Postgres running locally.
+Requires Go 1.24+, Node 20+, Python 3.11/3.12, and PostgreSQL.
 
 ```bash
-# 1. Database
 createdb utility_billing_platform_local
+# .env at repo root: DATABASE_URL, JWT_SECRET, CRED_MASTER_KEY (openssl rand -hex 32), OPENROUTER_API_KEY
 
-# 2. Environment — copy and fill in:
-cat > .env <<EOF
-DATABASE_URL=postgres://localhost:5432/utility_billing_platform_local?sslmode=disable
-PORT=8090
-JWT_SECRET=$(openssl rand -hex 24)
-CRED_MASTER_KEY=$(openssl rand -hex 32)   # AES-256 key for portal credentials
-OPENROUTER_API_KEY=sk-or-...              # for AI bill extraction (OpenAI-compatible)
-OPENROUTER_MODEL=openai/gpt-4o-mini       # optional; extraction model
-EOF
-
-# 3. Scraper environment (venv + Playwright Chromium)
-./scrapers/setup.sh
-
-# 4. API (runs migrations automatically on boot)
-cd api && go run ./cmd/server
-
-# 5. Create the first org + login (no self-serve signup)
-cd api
-go run ./cmd/admin create-org  --name "Acme Property Management"
+./scrapers/setup.sh                                   # venv + Playwright Chromium
+cd api && go run ./cmd/server                         # :8090, runs migrations
+go run ./cmd/admin create-org  --name "Acme PM"
 go run ./cmd/admin create-user --org-id 1 --email you@acme.com --password changeme
-
-# 6. Frontend
-cd web && npm install && npm run dev    # http://localhost:5174
+cd ../web && npm install && npm run dev               # http://localhost:5174
 ```
 
-Or, with `.env` in place: `make api`, `make web`, `make scrapers-setup`.
-
-## The demo flow
-
-1. Sign in → **Properties** → add a property or two.
-2. **Utility Accounts** → add accounts: leave credentials blank for
-   manual-only, or enter real portal credentials to enable auto-scrape
-   (encrypted with AES-256-GCM; decrypted only at dispatch time).
-3. **Bills → Upload bill PDF**: drop any bill PDF; AI extracts vendor, amount,
-   statement/due dates and service period, and the bill appears with its PDF.
-4. **Utility Accounts → Scrape now** (or wait for the hourly scheduler):
-   pulls the latest bill from the provider portal; progress on **Scrape Jobs**.
-5. **Bills → Export CSV**: accounting-import-ready file (amounts in dollars,
-   ISO dates, property + account number per row).
-
-## Operational notes
-
-- **Scheduler**: hourly tick (`SCHEDULER_INTERVAL_SEC`); accounts with
-  credentials are scraped when `next_scheduled_scrape_at` elapses. Success
-  advances the slot to `service_end + 1 month + 1 day`; scheduler-driven
-  failures retry weekly up to 3× then wait for the next natural cycle.
-- **2FA providers (Aquarion, WinWaste)**: when the portal emails a code, write
-  it to `data/handoff/<provider>/2fa_code.txt` while the scraper waits — the
-  worker logs the exact path per run.
-- **Provider stability**: prefer stable providers for demos. Optimum has a
-  documented history of breakage (residential-proxy dependency) — don't lead
-  a demo with it.
-- Bill PDFs are stored under `data/store/` (`STORE_ROOT`); bills reference
-  them by object key.
-- Multi-tenancy is enforced two ways: (1) application layer — every JWT carries
-  `org_id` and every query filters on it; (2) Postgres **row-level security**
-  (`003_rls.sql`) as defense-in-depth. The API runs two pools — an app pool
-  (request path; the OrgDB middleware pins a connection and sets `app.org_id` so
-  RLS scopes every query to the caller's org) and a bypass pool (worker,
-  scheduler, login, migrations, admin CLI — trusted cross-org paths).
-  **RLS only enforces when the app connects as a non-superuser role** (true on
-  Render; a local superuser bypasses it). Per-tenant key rotation is still
-  post-pilot.
-
-## Layout
-
-```
-api/            Go API (cmd/server, cmd/admin, modules/{orgs,properties,utilities,export})
-scrapers/       Python scrapers: providers/ (16), common/, parsers/ (copied from ra-avm)
-migrations/     Sequential SQL migrations (applied automatically at API boot)
-web/            React frontend
-data/           Local PDF store + 2FA handoff dirs (gitignored)
-```
+More detail: `FEATURE_PLAN.md` (product scope), `TECHNICAL_PLAN.md` (architecture), `DECISIONS.md` (build log), `DEPLOY.md` and `deploy/ovh/README.md` (production).
